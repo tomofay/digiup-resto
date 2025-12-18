@@ -83,19 +83,46 @@
 
     {{-- Aksi Customer --}}
     @if(!auth()->user()->isAdmin())
-        <div class="d-flex gap-2">
-            @if(method_exists($reservation, 'canBeCancelled') && $reservation->canBeCancelled())
-                <form action="{{ route('reservations.cancel', $reservation) }}"
-                      method="POST"
-                      onsubmit="return confirm('Batalkan reservasi ini?')">
-                    @csrf
-                    <button class="btn btn-outline-danger" type="submit">Cancel Reservasi</button>
-                </form>
+        <div class="d-flex flex-wrap gap-2 mt-3">
+
+            {{-- Tombol upload bukti pembayaran (hanya jika pending & unpaid) --}}
+            @if($reservation->status === 'pending' && $reservation->payment_status === 'unpaid')
+                <a href="{{ route('payments.create', $reservation) }}"
+                   class="btn btn-success">
+                    Bayar / Upload Bukti
+                </a>
             @endif
 
-            <a class="btn btn-outline-primary" href="{{ route('reservations.edit', $reservation) }}">
-                Ubah Reservasi
-            </a>
+            {{-- Tombol edit & cancel --}}
+            @if(method_exists($reservation, 'canBeCancelled') && $reservation->canBeCancelled())
+                <a href="{{ route('reservations.edit', $reservation) }}"
+                   class="btn btn-outline-primary">
+                    Ubah Reservasi
+                </a>
+
+                <form action="{{ route('reservations.cancel', $reservation) }}"
+                      method="POST"
+                      class="d-inline"
+                      onsubmit="return confirm('Batalkan reservasi ini?')">
+                    @csrf
+                    <button class="btn btn-outline-danger" type="submit">
+                        Batalkan Reservasi
+                    </button>
+                </form>
+            @endif
         </div>
     @endif
+
+    {{-- Aksi Admin --}}
+    @if(auth()->user()->isAdmin())
+        @if($reservation->payment && $reservation->payment->status === 'pending')
+            <div class="mt-3">
+                <a href="{{ route('payments.verify.form', $reservation) }}"
+                   class="btn btn-warning">
+                    Verifikasi Pembayaran
+                </a>
+            </div>
+        @endif
+    @endif
+
 @endsection

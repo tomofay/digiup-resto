@@ -6,6 +6,7 @@ use App\Models\Payment;
 use App\Models\Reservation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class PaymentController extends Controller
@@ -15,68 +16,143 @@ class PaymentController extends Controller
         $this->middleware('auth');
     }
 
-    // form bayar deposit untuk 1 reservasi
+    // form upload bukti tf untuk 1 reservasi
     public function create(Reservation $reservation)
     {
-        // admin boleh lihat juga, tapi biasanya pembayaran oleh customer
-        if (!Auth::user()->isAdmin() && $reservation->user_id !== Auth::id()) {
+        $user = Auth::user();
+        if (!$user) {
             abort(403);
         }
 
-        if ($reservation->payment_status === 'paid') {
-            return redirect()->route('reservations.show', $reservation)
-                ->with('success', 'Reservasi ini sudah dibayar.');
+        // Support both a model method isAdmin() or common attributes like is_admin/role
+        $isAdmin = method_exists($user, 'isAdmin')
+            ? $user->isAdmin()
+            : (!empty($user->is_admin) || (isset($user->role) && $user->role === 'admin'));
+
+        if (!$isAdmin && $reservation->user_id !== $user->id) {
+            abort(403);
         }
 
-        return view('payments.create', compact('reservation'));
+        if ($reservation->status !== 'pending') {
+            return redirect()->route('reservations.show', $reservation)
+                ->with('error', 'Pembayaran hanya untuk reservasi dengan status pending.');
+        }
+
+        // ambil payment terakhir (kalau sudah pernah upload)
+        $payment = $reservation->payment;
+
+        return view('payments.create', compact('reservation', 'payment'));
     }
 
-    // simpan pembayaran
+    // simpan / update bukti transfer
     public function store(Request $request, Reservation $reservation)
     {
         if (!Auth::user()->isAdmin() && $reservation->user_id !== Auth::id()) {
             abort(403);
         }
 
-        // aturan: pembayaran hanya ketika reservasi masih pending
         if ($reservation->status !== 'pending') {
             return redirect()->route('reservations.show', $reservation)
-                ->with('error', 'Pembayaran hanya bisa dilakukan saat reservasi masih pending.');
-        }
-
-        if ($reservation->payment_status === 'paid') {
-            return redirect()->route('reservations.show', $reservation)
-                ->with('success', 'Reservasi ini sudah dibayar.');
+                ->with('error', 'Pembayaran hanya untuk reservasi dengan status pending.');
         }
 
         $validated = $request->validate([
             'payment_method' => 'required|in:transfer,cash,ewallet',
             'amount' => 'required|numeric|min:0',
+            'proof_image' => 'required|image|max:3072', // 3MB
         ]);
 
-        // optional: paksa amount = deposit_amount
-        $amount = (float) ($reservation->deposit_amount ?? 0);
-        if ($amount <= 0) {
-            $amount = (float) $validated['amount'];
+        // paksa amount = deposit_amount kalau di-set
+        $amount = (float) ($reservation->deposit_amount ?? $validated['amount']);
+
+        // jika sudah ada payment, update; kalau belum, buat baru
+        $payment = $reservation->payment ?: new Payment(['user_id' => $reservation->user_id]);
+
+        // hapus bukti lama kalau ada
+        if ($payment->proof_image) {
+            Storage::disk('public')->delete($payment->proof_image);
         }
 
-        Payment::create([
-            'user_id' => $reservation->user_id,
+        $path = $request->file('proof_image')->store('payments', 'public');
+
+        $payment->fill([
             'reservation_id' => $reservation->id,
             'amount' => $amount,
-            'status' => 'completed',
+            'status' => 'pending', // menunggu verifikasi admin
             'payment_method' => $validated['payment_method'],
-            'transaction_id' => Str::upper(Str::random(12)),
+            'transaction_id' => $payment->transaction_id ?: Str::upper(Str::random(12)),
+            'proof_image' => $path,
         ]);
 
-        // update reservation payment status
-        $reservation->update([
-            'payment_status' => 'paid',
-            // opsional: auto-confirm setelah bayar
-            'status' => 'confirmed',
-        ]);
+        $payment->save();
+
+        // CATATAN: TIDAK mengubah reservation->payment_status, tetap 'unpaid'
+        // dan reservation->status tetap 'pending'
 
         return redirect()->route('reservations.show', $reservation)
-            ->with('success', 'Pembayaran berhasil. Reservasi terkonfirmasi.');
+            ->with('success', 'Bukti transfer berhasil diunggah. Menunggu verifikasi admin.');
+    }
+
+    // ADMIN: halaman verifikasi pembayaran
+    public function verifyForm(Reservation $reservation)
+    {
+        if (!Auth::user()->isAdmin()) {
+            abort(403);
+        }
+
+        $payment = $reservation->payment;
+
+        if (!$payment) {
+            return redirect()->route('reservations.show', $reservation)
+                ->with('error', 'Belum ada data pembayaran untuk reservasi ini.');
+        }
+
+        return view('payments.verify', compact('reservation', 'payment'));
+    }
+
+    // ADMIN: proses verifikasi (set paid / rejected)
+    public function verify(Request $request, Reservation $reservation)
+    {
+        if (!Auth::user()->isAdmin()) {
+            abort(403);
+        }
+
+        $payment = $reservation->payment;
+
+        if (!$payment) {
+            return redirect()->route('reservations.show', $reservation)
+                ->with('error', 'Belum ada data pembayaran untuk reservasi ini.');
+        }
+
+        $validated = $request->validate([
+            'action' => 'required|in:approve,reject',
+        ]);
+
+        if ($validated['action'] === 'approve') {
+            $payment->update([
+                'status' => 'completed',
+            ]);
+
+            $reservation->update([
+                'payment_status' => 'paid',
+                'status' => 'confirmed',
+            ]);
+
+            $msg = 'Pembayaran disetujui. Reservasi dikonfirmasi.';
+        } else {
+            $payment->update([
+                'status' => 'failed',
+            ]);
+
+            // opsional: tetap pending / bisa dibatalkan admin
+            $reservation->update([
+                'payment_status' => 'unpaid',
+            ]);
+
+            $msg = 'Pembayaran ditolak. Silakan hubungi pelanggan.';
+        }
+
+        return redirect()->route('reservations.show', $reservation)
+            ->with('success', $msg);
     }
 }

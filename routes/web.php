@@ -35,9 +35,20 @@ Route::middleware('auth')->group(function () {
 
     // Menus
     Route::resource('menus', MenuController::class);
-});
-Route::get('/reservations/{reservation}/payment', [PaymentController::class, 'create'])
-    ->name('payments.create');
 
-Route::post('/reservations/{reservation}/payment', [PaymentController::class, 'store'])
-    ->name('payments.store');
+    // Payments
+    Route::get('/reservations/{reservation}/payment', [PaymentController::class, 'create'])
+        ->name('payments.create');
+
+    Route::post('/reservations/{reservation}/payment', [PaymentController::class, 'store'])
+        ->name('payments.store');
+});
+
+// Hanya admin
+Route::middleware('admin')->group(function () {
+    Route::get('/reservations/{reservation}/payment/verify', [PaymentController::class, 'verifyForm'])
+        ->name('payments.verify.form');
+
+    Route::post('/reservations/{reservation}/payment/verify', [PaymentController::class, 'verify'])
+        ->name('payments.verify');
+});

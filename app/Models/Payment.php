@@ -12,6 +12,7 @@ class Payment extends Model
         'status',
         'payment_method',
         'transaction_id',
+        'proof_image', // <-- ditambahkan
     ];
 
     protected $casts = [

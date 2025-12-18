@@ -110,6 +110,15 @@
                                                 </form>
                                             @endif
                                         @endif
+
+                                        @if(!auth()->user()->isAdmin())
+                                            @if($reservation->status === 'pending' && $reservation->payment_status === 'unpaid')
+                                                <a href="{{ route('payments.create', $reservation) }}"
+                                                   class="btn btn-sm btn-success">
+                                                    Bayar
+                                                </a>
+                                            @endif
+                                        @endif
                                     </td>
                                 </tr>
                             @endforeach
